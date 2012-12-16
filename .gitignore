@@ -1,0 +1,4 @@
+*.DS_Store
+*.py[c|o]
+.settings
+.project
