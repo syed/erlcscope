@@ -53,16 +53,12 @@ process_atom(Node, S=#state{}) ->
 	LineNo = erl_syntax:get_pos(Node),
 	Line = lists:nth(LineNo, S#state.data),
 	% search pos in line
-	%io:format("process_atom: lineNo ~b, line ~b, Data ~p~n",[LineNo,length(Line),S#state.pos]),
 	StartPos = case S#state.line_no == LineNo of 
 				true -> S#state.pos;
 				false -> 1
 			   end,
 				   
 	Pos = string:str( string:sub_string(Line, StartPos), AtomName),
-	% search pos in line
-	%Pos = string:str( string:sub_string(Line, S#state.pos), AtomName),
-	%io:format("atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
 	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
 	{[], NewState}.
 
@@ -127,8 +123,6 @@ write_symbol_to_db(Type, Name, LineNo, Pos, S=#state{}) ->
 			{LineNo, Pos + length(Name)}
 	end,
 	S#state{line_no=NewLine, pos=NewPos}.
-	%io:format("type ~s name ~s pos ~s line ~s state ~p~n",[Type, Name, LineNo, Pos, S]),
-	%S.
 	
 
 write_symbol_trailer_to_db(Db,Files) ->
@@ -146,8 +140,6 @@ write_symbol_trailer_to_db(Db,Files) ->
 %% ====================================================================
 %% Other utility functions
 %% ====================================================================
-
-
 
 split_data_to_lines(Data) ->
 	split_data_to_lines(Data,[],[]).
