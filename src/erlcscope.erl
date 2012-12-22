@@ -45,21 +45,18 @@ traverse_tree(TreeList, S=#state{}) ->
     	end, NodeList)
 	end, TreeList).
 
-process_atom(Node,S=#state{}) ->
-	{[], S}.
-
-%process_atom(Node, S=#state{}) ->
-%	AtomName = erl_syntax:atom_name(Node),
-%	LineNo = erl_syntax:get_pos(Node),
+process_atom(Node, S=#state{}) ->
+	AtomName = erl_syntax:atom_name(Node),
+	LineNo = erl_syntax:get_pos(Node),
 	%Line = string:strip(lists:nth(S#state.line_no + 1, S#state.data)),
-%	Line = string:strip(lists:nth(LineNo, S#state.data)),
+	Line = lists:nth(LineNo, S#state.data),
 	% search pos in line
-%	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
+	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
 	% search pos in line
-%	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
-%	io:format("Got atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
-%	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, Pos, S),
-%	{[], S}.
+	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
+	%io:format("Got atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
+	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, Pos, S),
+	{[], NewState}.
 
 %% ====================================================================
 %% Functions for writing to the file
@@ -71,31 +68,55 @@ init_symbol_db(Db, TrailerOffset ) ->
 									[?CSCOPE_VERSION, Cwd,TrailerOffset])),
 	io:format(Db,"~s",[Header]).
 
+%% Format For File      
+%% <file mark><file path>
+%% <empty line>
+
 write_symbol_to_db(?FILE_MARK, Fname, _LineNo , _Pos , S=#state{}) ->
 	io:format(S#state.db,"~s~s~n~n", [?FILE_MARK, Fname]);
 	
+%% Format for other symbols
+%% <line number><blank><non-symbol text>
+%% <optional mark><symbol>
+%% <non-symbol text>
+%% repeat above 2 lines as necessary
+%% <empty line>
+%% Leading and trailing white space in  the  source  line  is
+%% removed. Tabs are changed to blanks, and multiple blanks
+%% are squeezed to a single  blank,  even  in  character  and
+%% string  constants.
+%% whitespaces are already removed when saving the lines in 
+%% the state
+
 write_symbol_to_db(Type, Name, LineNo, Pos, S=#state{}) ->
-	%io:format(S#state.db,"~s~s~n~n",[Type, Name]).
 	Fd = S#state.db,
-	Line = string:strip(lists:nth(LineNo, S#state.data)),
+	Line = lists:nth(LineNo, S#state.data),
+	
 	{NewLine, NewPos} = case LineNo == S#state.line_no  of
 		  false ->  
  			 % we have moved to new line, complete the old line
 	     	 % and write the new line
-				OldLine = string:strip(lists:nth(S#state.line_no, S#state.data)),
-				io:format("~s~n", [string:substr(OldLine,S#state.pos)]),
-							
-				NonSymbolData = string:substr(Line, S#state.pos, Pos),
-				io:format("~s~n",[NonSymbolData]),
-				io:format("~s~s~n",[Type,Name]),
-				{LineNo, Pos + length(Name)};
+			 
+			 case S#state.line_no  of
+				 0 -> ok;
+				 _ ->
+					OldLine = lists:nth(S#state.line_no, S#state.data),
+					io:format(Fd,"~s~n~n", [string:substr(OldLine,S#state.pos)])
+			end,
+						
+			% write new line number with non-symbol data
+			NonSymbolData = string:substr(Line, S#state.pos, Pos),
+			io:format(Fd,"~b ~s~n",[LineNo,NonSymbolData]),
+			io:format(Fd,"~s~s~n",[Type,Name]),
+			{LineNo, Pos + length(Name)};
 		  true ->
-			 % we are in the same line, we will just update the position
-				NonSymbolData = string:substr(Line, S#state.pos, Pos),
-				io:format("~s~n",[NonSymbolData]),
-				io:format("~s~s~n",[Type,Name]),
-				{LineNo, Pos + length(Name)}
+		    % we are in the same line, we will just update the position
+			NonSymbolData = string:substr(Line, S#state.pos, Pos),
+			io:format(Fd,"~s~n",[NonSymbolData]),
+			io:format(Fd,"~s~s~n",[Type,Name]),
+			{LineNo, Pos + length(Name)}
 	end,
+	io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b ~n",[S#state.line_no, S#state.pos,NewLine,NewPos,length(Line)]),
 	S#state{line_no=NewLine, pos=NewPos}.
 	%io:format("type ~s name ~s pos ~s line ~s state ~p~n",[Type, Name, LineNo, Pos, S]),
 	%S.
@@ -117,6 +138,8 @@ write_symbol_trailer_to_db(Db,Files) ->
 %% Other utility functions
 %% ====================================================================
 
+
+
 split_data_to_lines(Data) ->
 	split_data_to_lines(Data,[],[]).
 
@@ -125,6 +148,9 @@ split_data_to_lines([],Acc,Out)->
 
 split_data_to_lines([Ch|Rem], Acc, Out) ->
 	case Ch == $\n of
-		true -> split_data_to_lines(Rem, [], [ lists:reverse(Acc) | Out ]);
+		true -> split_data_to_lines(Rem, [], [ lists:reverse(remove_spaces(Acc)) | Out ]);
 		false -> split_data_to_lines(Rem, [Ch|Acc], Out )
 	end.
+
+remove_spaces(String) ->
+	re:replace(String, "\\s+", " ", [global, {return, list}]).

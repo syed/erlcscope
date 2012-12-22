@@ -2,7 +2,7 @@
 -define(OUTPUT_FILE, "cscope.out").
 
 
--record(state, { pos=0, line_no=0, data=[], db}).
+-record(state, { pos=1, line_no=0, data=[], db}).
 
 
 %% Markers used in cscope database
