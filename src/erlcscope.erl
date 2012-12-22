@@ -1,5 +1,5 @@
 %% @author Syed Ahmed
-%% @doc Program to erlang files and build a cscope database.
+%% @doc Program to parse erlang files and build a cscope database.
 -module(erlcscope).
 -include("erlcscope.hrl").
 
@@ -16,8 +16,7 @@ main()->
 	lists:foreach(fun(Fname) -> 
 		build_symbol_db_from_file(Db,Fname) end, 
 	Files),
-	write_symbol_trailer_to_db(Db, Files),
-	file:close(Db).
+	write_symbol_trailer_to_db(Db, Files).
 
 %% ====================================================================
 %% Parsing and processing functions
@@ -46,18 +45,21 @@ traverse_tree(TreeList, S=#state{}) ->
     	end, NodeList)
 	end, TreeList).
 
-process_atom(Node, S=#state{}) ->
-	AtomName = erl_syntax:atom_name(Node),
-	LineNo = erl_syntax:get_pos(Node),
-	%Line = string:strip(lists:nth(S#state.line_no + 1, S#state.data)),
-	Line = string:strip(lists:nth(LineNo, S#state.data)),
-	% search pos in line
-	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
-	% search pos in line
-	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
-	io:format("Got atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
-	%%NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, Pos, S),
+process_atom(Node,S=#state{}) ->
 	{[], S}.
+
+%process_atom(Node, S=#state{}) ->
+%	AtomName = erl_syntax:atom_name(Node),
+%	LineNo = erl_syntax:get_pos(Node),
+	%Line = string:strip(lists:nth(S#state.line_no + 1, S#state.data)),
+%	Line = string:strip(lists:nth(LineNo, S#state.data)),
+	% search pos in line
+%	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
+	% search pos in line
+%	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
+%	io:format("Got atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
+%	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, Pos, S),
+%	{[], S}.
 
 %% ====================================================================
 %% Functions for writing to the file
@@ -74,16 +76,41 @@ write_symbol_to_db(?FILE_MARK, Fname, _LineNo , _Pos , S=#state{}) ->
 	
 write_symbol_to_db(Type, Name, LineNo, Pos, S=#state{}) ->
 	%io:format(S#state.db,"~s~s~n~n",[Type, Name]).
-	io:format("type ~s name ~s pos ~s line ~s state ~p~n",[Type, Name, LineNo, Pos, S]),
-	S.
+	Fd = S#state.db,
+	Line = string:strip(lists:nth(LineNo, S#state.data)),
+	{NewLine, NewPos} = case LineNo == S#state.line_no  of
+		  false ->  
+ 			 % we have moved to new line, complete the old line
+	     	 % and write the new line
+				OldLine = string:strip(lists:nth(S#state.line_no, S#state.data)),
+				io:format("~s~n", [string:substr(OldLine,S#state.pos)]),
+							
+				NonSymbolData = string:substr(Line, S#state.pos, Pos),
+				io:format("~s~n",[NonSymbolData]),
+				io:format("~s~s~n",[Type,Name]),
+				{LineNo, Pos + length(Name)};
+		  true ->
+			 % we are in the same line, we will just update the position
+				NonSymbolData = string:substr(Line, S#state.pos, Pos),
+				io:format("~s~n",[NonSymbolData]),
+				io:format("~s~s~n",[Type,Name]),
+				{LineNo, Pos + length(Name)}
+	end,
+	S#state{line_no=NewLine, pos=NewPos}.
+	%io:format("type ~s name ~s pos ~s line ~s state ~p~n",[Type, Name, LineNo, Pos, S]),
+	%S.
 	
 
 write_symbol_trailer_to_db(Db,Files) ->
    	io:format(Db, "~s~n", [?SYMBOL_END]),
 	TrailerOffset = filelib:file_size(?OUTPUT_FILE),
 	io:format(Db, "1~n.~n0~n~p~n~p~n", [length(Files), lists:flatlength(Files) + length(Files)]),
-	lists:foreach(fun(Fname) -> io:format(Db,"~s~n",[Fname]) end, Files).
-
+	lists:foreach(fun(Fname) -> io:format(Db,"~s~n",[Fname]) end, Files),
+	file:close(Db),
+	{ok , Db2} = file:open(?OUTPUT_FILE, [read,write]),
+	io:format("Trailer offset ~b",[TrailerOffset]),
+	init_symbol_db(Db2, TrailerOffset),
+	file:close(Db2).
 
 
 %% ====================================================================
