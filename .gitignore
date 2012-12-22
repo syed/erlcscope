@@ -2,3 +2,4 @@
 *.py[c|o]
 .settings
 .project
+*.beam
