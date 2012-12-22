@@ -28,34 +28,42 @@ build_symbol_db_from_file(Db, SrcFile) ->
 	State = #state{db=Db,data=Lines},
 	write_symbol_to_db(?FILE_MARK, SrcFile, 0, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
-	traverse_tree([ParseTree],State).
+	NewState = traverse_tree([ParseTree],State),
+	% write the left over bytes
+	Line = lists:nth(NewState#state.line_no, NewState#state.data),
+	io:format(Db, "~s~n~n", [string:sub_string(Line, NewState#state.pos)]).
 
 
 traverse_tree(TreeList, S=#state{}) ->
-	lists:foreach( 
-	fun(NodeList) ->
-		lists:foreach(fun(Node) ->
+	lists:foldl( 
+	fun(NodeList,S2) ->
+		lists:foldl(fun(Node,State) ->
 			%io:format("Node ~p~n", [Node]),
 			{NewNode, NewState} = case erl_syntax:type(Node) of
-						  atom -> process_atom(Node, S);
-						  %function -> process_function(Node);
-						  _ -> {erl_syntax:subtrees(Node), S}
-					  end,
-					  traverse_tree(NewNode,NewState)
-    	end, NodeList)
-	end, TreeList).
+				  atom -> process_atom(Node, State);
+				  %function -> process_function(Node);
+				  _ -> {erl_syntax:subtrees(Node), State}
+			  end,
+			  traverse_tree(NewNode,NewState)
+    	end, S2, NodeList)
+	end, S, TreeList).
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
 	LineNo = erl_syntax:get_pos(Node),
-	%Line = string:strip(lists:nth(S#state.line_no + 1, S#state.data)),
 	Line = lists:nth(LineNo, S#state.data),
 	% search pos in line
-	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
+	%io:format("process_atom: lineNo ~b, line ~b, Data ~p~n",[LineNo,length(Line),S#state.pos]),
+	StartPos = case S#state.line_no == LineNo of 
+				true -> S#state.pos;
+				false -> 1
+			   end,
+				   
+	Pos = string:str( string:sub_string(Line, StartPos), AtomName),
 	% search pos in line
-	Pos = string:str( string:sub_string(Line, S#state.pos+1), AtomName),
-	%io:format("Got atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
-	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, Pos, S),
+	%Pos = string:str( string:sub_string(Line, S#state.pos), AtomName),
+	%io:format("atom ~p at pos ~p in line no ~p : ~s~n",[AtomName, Pos, LineNo, Line]),
+	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
 	{[], NewState}.
 
 %% ====================================================================
@@ -92,31 +100,32 @@ write_symbol_to_db(Type, Name, LineNo, Pos, S=#state{}) ->
 	Fd = S#state.db,
 	Line = lists:nth(LineNo, S#state.data),
 	
+	io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
 	{NewLine, NewPos} = case LineNo == S#state.line_no  of
 		  false ->  
  			 % we have moved to new line, complete the old line
 	     	 % and write the new line
 			 
-			 case S#state.line_no  of
-				 0 -> ok;
+			 StartPos = case S#state.line_no  of
+				 0 -> 1;
 				 _ ->
 					OldLine = lists:nth(S#state.line_no, S#state.data),
-					io:format(Fd,"~s~n~n", [string:substr(OldLine,S#state.pos)])
+					io:format(Fd,"~s~n~n", [string:substr(OldLine,S#state.pos)]),
+					1
 			end,
 						
 			% write new line number with non-symbol data
-			NonSymbolData = string:substr(Line, S#state.pos, Pos),
+			NonSymbolData =  string:substr(Line, StartPos , Pos-1),
 			io:format(Fd,"~b ~s~n",[LineNo,NonSymbolData]),
 			io:format(Fd,"~s~s~n",[Type,Name]),
 			{LineNo, Pos + length(Name)};
 		  true ->
 		    % we are in the same line, we will just update the position
-			NonSymbolData = string:substr(Line, S#state.pos, Pos),
+			NonSymbolData = string:sub_string(Line, S#state.pos, Pos-1),
 			io:format(Fd,"~s~n",[NonSymbolData]),
 			io:format(Fd,"~s~s~n",[Type,Name]),
 			{LineNo, Pos + length(Name)}
 	end,
-	io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b ~n",[S#state.line_no, S#state.pos,NewLine,NewPos,length(Line)]),
 	S#state{line_no=NewLine, pos=NewPos}.
 	%io:format("type ~s name ~s pos ~s line ~s state ~p~n",[Type, Name, LineNo, Pos, S]),
 	%S.
