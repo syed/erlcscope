@@ -28,6 +28,7 @@ build_symbol_db_from_file(Db, SrcFile) ->
 	State = #state{db=Db,data=Lines},
 	write_symbol_to_db(?FILE_MARK, SrcFile, 0, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
+	%io:format("~p",[ParseTree]),
 	NewState = traverse_tree([ParseTree],State),
 	% write the left over bytes
 	Line = lists:nth(NewState#state.line_no, NewState#state.data),
@@ -51,16 +52,22 @@ traverse_tree(TreeList, S=#state{}) ->
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
 	LineNo = erl_syntax:get_pos(Node),
-	Line = lists:nth(LineNo, S#state.data),
-	% search pos in line
-	StartPos = case S#state.line_no == LineNo of 
-				true -> S#state.pos;
-				false -> 1
-			   end,
-				   
-	Pos = string:str( string:sub_string(Line, StartPos), AtomName),
-	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
-	{[], NewState}.
+	%io:format("atom ~p, line ~p~n",[AtomName,LineNo]),
+	if 
+		LineNo > 0  ->
+			Line = lists:nth(LineNo, S#state.data),
+			% search pos in line
+			StartPos = case S#state.line_no == LineNo of 
+						true -> S#state.pos;
+						false -> 1 % new line, start from pos 1
+					   end,
+						   
+			Pos = string:str( string:sub_string(Line, StartPos), AtomName),
+			NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
+			{[], NewState};
+		true ->
+			{[], S}
+	end.
 
 %% ====================================================================
 %% Functions for writing to the file
@@ -96,7 +103,7 @@ write_symbol_to_db(Type, Name, LineNo, Pos, S=#state{}) ->
 	Fd = S#state.db,
 	Line = lists:nth(LineNo, S#state.data),
 	
-	io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
+	%io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
 	{NewLine, NewPos} = case LineNo == S#state.line_no  of
 		  false ->  
  			 % we have moved to new line, complete the old line
@@ -132,7 +139,7 @@ write_symbol_trailer_to_db(Db,Files) ->
 	lists:foreach(fun(Fname) -> io:format(Db,"~s~n",[Fname]) end, Files),
 	file:close(Db),
 	{ok , Db2} = file:open(?OUTPUT_FILE, [read,write]),
-	io:format("Trailer offset ~b",[TrailerOffset]),
+	%io:format("Trailer offset ~b",[TrailerOffset]),
 	init_symbol_db(Db2, TrailerOffset),
 	file:close(Db2).
 
@@ -140,6 +147,10 @@ write_symbol_trailer_to_db(Db,Files) ->
 %% ====================================================================
 %% Other utility functions
 %% ====================================================================
+
+% splits string into a list of strings delimeted by newline.
+% blank lines are saved as empty lists. The library function
+% string:tokens() discards blank lines. 
 
 split_data_to_lines(Data) ->
 	split_data_to_lines(Data,[],[]).

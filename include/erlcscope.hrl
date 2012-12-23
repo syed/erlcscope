@@ -7,8 +7,8 @@
 
 %% Markers used in cscope database
 -define(FILE_MARK, "\t@").
--define(DEFINE_MARK, "\t#").
--define(DEFINE_END_MARK, "\t)").
+-define(MACRO_MARK, "\t#").
+-define(MACRO_END_MARK, "\t)").
 -define(FUNCTION_CALL_MARK, "\t`").
 -define(FUNCTION_DEF_MARK, "\t$").
 -define(FUNCTION_END_MARK, "\t}").
