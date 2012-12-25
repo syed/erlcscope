@@ -27,7 +27,7 @@ build_symbol_db_from_file(Db, SrcFile) ->
 	io:format("file ~p~n",[SrcFile]),
 	Lines = split_data_to_lines(binary_to_list(FileData)),
 	State = #state{db=Db,data=Lines},
-	write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
+	write_symbol_to_db(?FILE_MARK, SrcFile, 0, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
 	NewState = traverse_tree([ParseTree],State),
@@ -43,19 +43,35 @@ traverse_tree(TreeList, S=#state{}) ->
 			%io:format("Node ~p~n", [Node]),
 			{NewNode, NewState} = case erl_syntax:type(Node) of
 				  atom -> process_atom(Node, State);
-				  %function -> process_function(Node);
+				  function -> process_function(Node,State);
 				  _ -> {erl_syntax:subtrees(Node), State}
 			  end,
 			  traverse_tree(NewNode,NewState)
     	end, S2, NodeList)
 	end, S, TreeList).
 
+
+
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
 	io:format("atom ~p ~n",[AtomName]),
 	%NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
-	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
+	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, AtomName, Node, S),
 	{[], NewState}.
+
+% functions are in the form of FuncName/Airity so that
+% two functions with different airty but same name do 
+% not get mixed up
+
+process_function(Node, S=#state{}) ->
+	{FAtom, FArity} = erl_syntax_lib:analyze_function(Node),
+	Fname = atom_to_list(FAtom),% ++ "/" ++ integer_to_list(FArity),
+ 	io:format("function ~s~n",[Fname]),
+	NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, atom_to_list(FAtom), Fname, Node, S),
+	[_FuncTree, ClauseTree ]=  erl_syntax:subtrees(Node),
+	NewState2 = traverse_tree([ClauseTree], NewState1),
+	NewState3 = write_symbol_to_db(?FUNCTION_END_MARK, "", "", Node, NewState2),
+	{[], NewState3}.
 
 %% ====================================================================
 %% Functions for writing to the file
@@ -72,9 +88,15 @@ init_symbol_db(Db, TrailerOffset ) ->
 %% <file mark><file path>
 %% <empty line>
 
-write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
+write_symbol_to_db(?FILE_MARK, Fname, 	_SymName, _Node , S=#state{}) ->
 	io:format(S#state.db,"~s~s~n~n", [?FILE_MARK, Fname]);
-	
+
+% XXX: This assumes that there won't be two functions in the same line ... 
+write_symbol_to_db(?FUNCTION_END_MARK, _Name, _SymName, _Node, S=#state{}) ->
+	io:format(S#state.db,"~s~n~n", [?FUNCTION_END_MARK]),
+	NewLine = S#state.line_no+1,
+	S#state{line_no=NewLine,pos=1};
+
 %% Format for other symbols
 %% <line number><blank><non-symbol text>
 %% <optional mark><symbol>
@@ -88,7 +110,7 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
 %% whitespaces are already removed when saving the lines in 
 %% the state
 
-write_symbol_to_db(Type, Name, Node, S=#state{}) ->
+write_symbol_to_db(Type, Name, SymName, Node, S=#state{}) ->
 	Fd = S#state.db,
 	LineNo = erl_syntax:get_pos(Node),
 	case LineNo > 0 of
@@ -99,7 +121,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) ->
 				false -> 1 % new line, start from pos 1
 		    end,
 			Pos = string:str( string:sub_string(Line, SearchPos), Name) + SearchPos - 1,
-			%io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
+			io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
 			{NewLine, NewPos} = case (LineNo =/= S#state.line_no) or (LineNo == 1)  of
 				  true ->  
 		 			% we have moved to new line, complete the old line
@@ -115,13 +137,13 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) ->
 					% write new line number with non-symbol data
 					NonSymbolData =  string:substr(Line, StartPos , Pos-1),
 					io:format(Fd,"~b ~s~n",[LineNo,NonSymbolData]),
-					io:format(Fd,"~s~s~n",[Type,Name]),
+					io:format(Fd,"~s~s~n",[Type,SymName]),
 					{LineNo, Pos + length(Name)};
 				  false ->
 				    % we are in the same line, we will just update the position
 					NonSymbolData = string:sub_string(Line, S#state.pos, Pos-1),
 					io:format(Fd,"~s~n",[NonSymbolData]),
-					io:format(Fd,"~s~s~n",[Type,Name]),
+					io:format(Fd,"~s~s~n",[Type,SymName]),
 					{LineNo, Pos + length(Name)}
 			end,
 			S#state{line_no=NewLine, pos=NewPos};
