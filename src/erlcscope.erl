@@ -54,8 +54,7 @@ traverse_tree(TreeList, S=#state{}) ->
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
-	io:format("atom ~p ~n",[AtomName]),
-	%NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, LineNo, StartPos + Pos -1, S),
+	%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
 	NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, AtomName, Node, S),
 	{[], NewState}.
 
@@ -64,14 +63,20 @@ process_atom(Node, S=#state{}) ->
 % not get mixed up
 
 process_function(Node, S=#state{}) ->
-	{FAtom, FArity} = erl_syntax_lib:analyze_function(Node),
-	Fname = atom_to_list(FAtom),% ++ "/" ++ integer_to_list(FArity),
- 	io:format("function ~s~n",[Fname]),
-	NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, atom_to_list(FAtom), Fname, Node, S),
-	[_FuncTree, ClauseTree ]=  erl_syntax:subtrees(Node),
-	NewState2 = traverse_tree([ClauseTree], NewState1),
-	NewState3 = write_symbol_to_db(?FUNCTION_END_MARK, "", "", Node, NewState2),
-	{[], NewState3}.
+	try erl_syntax_lib:analyze_function(Node) of 
+		{FAtom, FArity} -> 
+			Fname = atom_to_list(FAtom),% ++ "/" ++ integer_to_list(FArity),
+		 	%io:format("function ~s~n",[Fname]),
+			NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, atom_to_list(FAtom), Fname, Node, S),
+			[_FuncTree, ClauseTree ]=  erl_syntax:subtrees(Node),
+			NewState2 = traverse_tree([ClauseTree], NewState1),
+			NewState3 = write_symbol_to_db(?FUNCTION_END_MARK, "", "", Node, NewState2),
+	        {[], NewState3}
+	catch 
+		_ ->
+			{[], S}
+	end.
+		
 
 %% ====================================================================
 %% Functions for writing to the file
@@ -110,7 +115,7 @@ write_symbol_to_db(?FUNCTION_END_MARK, _Name, _SymName, _Node, S=#state{}) ->
 %% whitespaces are already removed when saving the lines in 
 %% the state
 
-write_symbol_to_db(Type, Name, SymName, Node, S=#state{}) ->
+write_symbol_to_db(Type, Name, SymName, Node, S=#state{}) when length(Name) > 0 ->
 	Fd = S#state.db,
 	LineNo = erl_syntax:get_pos(Node),
 	case LineNo > 0 of
@@ -120,37 +125,47 @@ write_symbol_to_db(Type, Name, SymName, Node, S=#state{}) ->
 				true -> S#state.pos;
 				false -> 1 % new line, start from pos 1
 		    end,
+			SubStr = string:sub_string(Line, SearchPos),
+			FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
 			Pos = string:str( string:sub_string(Line, SearchPos), Name) + SearchPos - 1,
-			io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
-			{NewLine, NewPos} = case (LineNo =/= S#state.line_no) or (LineNo == 1)  of
-				  true ->  
-		 			% we have moved to new line, complete the old line
-			     	% and write the new line
-					StartPos = 1,
-					if LineNo > 1 ->
-						OldLine = lists:nth(S#state.line_no, S#state.data),
-						io:format(Fd,"~s~n~n", [string:substr(OldLine,S#state.pos)]);
-					
-						true -> ok
-					end,
-								
-					% write new line number with non-symbol data
-					NonSymbolData =  string:substr(Line, StartPos , Pos-1),
-					io:format(Fd,"~b ~s~n",[LineNo,NonSymbolData]),
-					io:format(Fd,"~s~s~n",[Type,SymName]),
-					{LineNo, Pos + length(Name)};
-				  false ->
-				    % we are in the same line, we will just update the position
-					NonSymbolData = string:sub_string(Line, S#state.pos, Pos-1),
-					io:format(Fd,"~s~n",[NonSymbolData]),
-					io:format(Fd,"~s~s~n",[Type,SymName]),
-					{LineNo, Pos + length(Name)}
-			end,
-			S#state{line_no=NewLine, pos=NewPos};
-	   false ->
-		   S
-	end.
+			case Pos > SearchPos of 
+			   true ->
+				 {NewLine, NewPos} = case (LineNo =/= S#state.line_no) or (LineNo == 1)  of
+					  true ->  
+			 			% we have moved to new line, complete the old line
+				     	% and write the new line
+						StartPos = 1,
+						if LineNo > 1 ->
+							OldLine = lists:nth(S#state.line_no, S#state.data),
+							io:format(Fd,"~s~n~n", [string:substr(OldLine,S#state.pos)]);
+						
+							true -> ok
+						end,
+									
+						% write new line number with non-symbol data
+						
+						NonSymbolData =  string:substr(Line, StartPos , Pos-1),
+						io:format(Fd,"~b ~s~n",[LineNo,NonSymbolData]),
+						io:format(Fd,"~s~s~n",[Type,SymName]),
+						{LineNo, Pos + length(Name)};
+					  false ->
+					    % we are in the same line, we will just update the position
+	    				% io:format("old line ~b old pos ~b Newline ~b, newpos ~b linelen ~b name ~s ~n",[S#state.line_no, S#state.pos,LineNo,Pos,length(Line),Name]),
+						NonSymbolData = string:sub_string(Line, S#state.pos, Pos-1),
+						io:format(Fd,"~s~n",[NonSymbolData]),
+						io:format(Fd,"~s~s~n",[Type,SymName]),
+						{LineNo, Pos + length(Name)}
+					end, % (LineNo =/= S#state.line_no) or (LineNo == 1)
+				S#state{line_no=NewLine, pos=NewPos};
+			false ->
+				S
+		end; % Pos > 0
+		false ->  
+			S
+	end; % LineNo > 0
 	
+write_symbol_to_db(_Type, _Name, _SymName, _Node, S=#state{}) ->
+	S.
 
 write_symbol_trailer_to_db(Db,Files) ->
    	io:format(Db, "~s~n", [?SYMBOL_END]),
