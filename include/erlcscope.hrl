@@ -1,7 +1,3 @@
--define(INPUT_FILE, "cscope.files").
--define(OUTPUT_FILE, "cscope.out").
-
-
 -record(state, { pos=1, line_no=0, data=[], db}).
 
 
@@ -21,3 +17,8 @@
 -define(CSCOPE_VERSION, "15").
 -define(SYMBOL_END, ?FILE_MARK).
 -define(NEWLINE_SEP, "\n").
+
+%% other constants
+-define(INPUT_FILE, "cscope.files").
+-define(OUTPUT_FILE, "cscope.out").
+-define(ERL_EXTENSIONS, [".erl",".hrl"]).

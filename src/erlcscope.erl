@@ -2,6 +2,7 @@
 %% @doc Program to parse erlang files and build a cscope database.
 -module(erlcscope).
 -include("erlcscope.hrl").
+-include_lib("kernel/include/file.hrl").
 
 %% ====================================================================
 %% API functions
@@ -12,9 +13,19 @@ start_link()->
 	Pid = spawn_link(fun main/1),
 	{ok,Pid}.
 
-main(InFile)->
-	{ok, Data} = file:read_file(InFile),
-	Files = lists:sort(string:tokens(binary_to_list(Data), ?NEWLINE_SEP)),
+main(InPath)->
+	case filelib:is_regular(filename:join(InPath, ?INPUT_FILE)) of
+	 	true->	
+			io:format("Using source files from ~s~n",[?INPUT_FILE]),
+			{ok, Data} = file:read_file(filename:join(InPath, ?INPUT_FILE)),
+	 		Files = lists:sort(string:tokens(binary_to_list(Data), ?NEWLINE_SEP));
+		false ->
+			io:format("Searching for source files ...~n"),
+			Files = find_source_files(InPath),
+			{ok, FilesFd} = file:open(filename:join(InPath, ?INPUT_FILE), [write]),
+			lists:foreach(fun(File) -> io:format(FilesFd, "~s~n", [File]) end, Files),
+			file:close(FilesFd)
+	end,
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
 	lists:foreach(fun(Fname) -> 
@@ -28,7 +39,7 @@ main(InFile)->
 
 build_symbol_db_from_file(Db, SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
-	io:format("file ~p~n",[SrcFile]),
+	io:format("processing ~p~n",[SrcFile]),
 	Lines = split_data_to_lines(binary_to_list(FileData)),
 	State = #state{db=Db,data=Lines},
 	write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
@@ -54,12 +65,25 @@ traverse_tree(TreeList, S=#state{}) ->
     	end, S2, NodeList)
 	end, S, TreeList).
 
-
-% FIXME: not processing attributes leads to some crashes
-% where atoms line no is 0
-process_attribute(_Node,S=#state{}) ->
- 	{[],S}.
-
+process_application(Node, S=#state{}) ->
+	%io:format("application ~p~n",[erl_syntax_lib:analyze_application(Node)]),
+	try erl_syntax_lib:analyze_application(Node) of 
+		{ _ModName, {Fname, _Airity} } ->
+			Name = atom_to_list(Fname),
+			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
+			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
+			{[ApplicationArgs],NewState};
+		{ Fname, _Arity } -> 
+			Name = atom_to_list(Fname),
+			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
+			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
+			{[ApplicationArgs],NewState};
+		_ ->
+			{[],S}
+	catch 
+		syntax_error -> 
+		   {[],S}
+	end.
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
@@ -73,6 +97,9 @@ process_atom(Node, S=#state{}) ->
 		{[],S}
 	end.
 
+
+process_attribute(_Node,S=#state{}) ->
+ 	{[],S}.
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of 
@@ -89,22 +116,6 @@ process_function(Node, S=#state{}) ->
 			{[], S}
 	end.
 		
-process_application(Node, S=#state{}) ->
-	try erl_syntax_lib:analyze_application(Node) of 
-		{ _ModName, {Fname, _Airity} } ->
-			Name = atom_to_list(Fname),
-			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
-			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
-			{[ApplicationArgs],NewState};
-		{ Fname, _Arity } -> 
-			Name = atom_to_list(Fname),
-			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
-			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
-			{[ApplicationArgs],NewState}
-	catch 
-		syntax_error -> 
-		   {[],S}
-	end.
 
 process_variable(Node, S=#state{}) ->
 	VarName = erl_syntax:variable_literal(Node),
@@ -227,8 +238,33 @@ split_data_to_lines([Ch|Rem], Acc, Out) ->
 		false -> split_data_to_lines(Rem, [Ch|Acc], Out )
 	end.
 
+% simple function which replaces multiple spaces with single space
+
 remove_spaces(String) ->
 	re:replace(String, "\\s+", " ", [global, {return, list}]).
 
-debug_print_state(S=#state{}) ->
-	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
+
+% recursively find erlang files, returns a list of filenames
+
+find_source_files(Path) ->
+	{ok, Files} = file:list_dir(Path),
+	lists:foldr(fun(F,Acc) ->
+				File = filename:join(Path, F),
+				{ok, Info=#file_info{}} = file:read_file_info(File),
+				case Info#file_info.type of 
+					directory -> 
+						find_source_files(File) ++ Acc;
+					regular ->
+						case lists:member(filename:extension(File), ?ERL_EXTENSIONS) of 
+							true -> [File|Acc];
+							false -> Acc
+						end;
+					_ -> 
+						Acc
+				end % case end
+				end, [], Files).
+
+
+%debug_print_state(S=#state{}) ->
+%	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
+

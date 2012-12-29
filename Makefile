@@ -3,7 +3,7 @@ DEST_BIN=~/bin
 PROG=erlcscope
 REBAR=./rebar
 
-erlcscope: 
+erlcscope:  src/
 	$(REBAR) compile
 	$(REBAR) escriptize
 
