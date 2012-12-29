@@ -64,7 +64,6 @@ process_attribute(_Node,S=#state{}) ->
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
 	%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
-	debug_print_state(S),
 	LineNo = erl_syntax:get_pos(Node),
 	if  LineNo > 0 ->
 		NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
