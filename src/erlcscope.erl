@@ -6,10 +6,14 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([main/0]).
+-export([start_link/0,main/1]).
 
-main()->
-	{ok, Data} = file:read_file(?INPUT_FILE),
+start_link()->
+	Pid = spawn_link(fun main/1),
+	{ok,Pid}.
+
+main(InFile)->
+	{ok, Data} = file:read_file(InFile),
 	Files = lists:sort(string:tokens(binary_to_list(Data), ?NEWLINE_SEP)),
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
@@ -30,10 +34,7 @@ build_symbol_db_from_file(Db, SrcFile) ->
 	write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
-	NewState = traverse_tree([ParseTree],State),
-	% write the left over bytes
-	Line = lists:nth(NewState#state.line_no, NewState#state.data),
-	io:format(Db, "~s~n~n", [string:sub_string(Line, NewState#state.pos)]).
+	traverse_tree([ParseTree],State).
 
 
 traverse_tree(TreeList, S=#state{}) ->
@@ -56,13 +57,14 @@ traverse_tree(TreeList, S=#state{}) ->
 
 % FIXME: not processing attributes leads to some crashes
 % where atoms line no is 0
-process_attribute(Node,S=#state{}) ->
+process_attribute(_Node,S=#state{}) ->
  	{[],S}.
 
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
 	%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
+	debug_print_state(S),
 	LineNo = erl_syntax:get_pos(Node),
 	if  LineNo > 0 ->
 		NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
@@ -75,10 +77,10 @@ process_atom(Node, S=#state{}) ->
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of 
-		{FAtom, FArity} -> 
+		{FAtom, _FArity} -> 
 			Fname = atom_to_list(FAtom),
 		 	%io:format("function ~s~n",[Fname]),
-			NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, atom_to_list(FAtom), Node, S),
+			NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, Fname, Node, S),
 			[_FuncTree, ClauseTree ]=  erl_syntax:subtrees(Node),
 			NewState2 = traverse_tree([ClauseTree], NewState1),
 			NewState3 = write_symbol_to_db(?FUNCTION_END_MARK, "", Node, NewState2),
@@ -90,12 +92,12 @@ process_function(Node, S=#state{}) ->
 		
 process_application(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_application(Node) of 
-		{ ModName, {Fname, Airity} } ->
+		{ _ModName, {Fname, _Airity} } ->
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
 			{[ApplicationArgs],NewState};
-		{ Fname, Arity } -> 
+		{ Fname, _Arity } -> 
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
@@ -230,4 +232,4 @@ remove_spaces(String) ->
 	re:replace(String, "\\s+", " ", [global, {return, list}]).
 
 debug_print_state(S=#state{}) ->
-	{S#state.line_no, S#state.pos}.
+	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
