@@ -42,10 +42,11 @@ traverse_tree(TreeList, S=#state{}) ->
 		lists:foldl(fun(Node,State) ->
 			%io:format("Node ~p~n", [Node]),
 			{NewNode, NewState} = case erl_syntax:type(Node) of
-				  atom -> process_atom(Node, State);
-				  function -> process_function(Node,State);
 				  application -> process_application(Node, State);
+				  atom -> process_atom(Node, State);
 				  attribute -> process_attribute(Node,State);
+				  function -> process_function(Node,State);
+				  variable -> process_variable(Node,State);
 				  _ -> {erl_syntax:subtrees(Node), State}
 			  end,
 			  traverse_tree(NewNode,NewState)
@@ -53,13 +54,10 @@ traverse_tree(TreeList, S=#state{}) ->
 	end, S, TreeList).
 
 
+% FIXME: not processing attributes leads to some crashes
+% where atoms line no is 0
 process_attribute(Node,S=#state{}) ->
-	NewState = case erl_syntax_lib:analyze_attribute(Node) of 
-		{ module, ModAtom } ->
-			S#state{modname=atom_to_list(ModAtom)};
-		_ -> S
-    end,
- 	{[],NewState}.
+ 	{[],S}.
 
 
 process_atom(Node, S=#state{}) ->
@@ -93,13 +91,11 @@ process_function(Node, S=#state{}) ->
 process_application(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_application(Node) of 
 		{ ModName, {Fname, Airity} } ->
-			io:format("application mod ~p func ~p airity~p~n",[ModName,Fname,Airity]),
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
 			{[ApplicationArgs],NewState};
 		{ Fname, Arity } -> 
-			io:format("application func ~p airity ~p ~n",[Fname,Arity]),
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
@@ -109,6 +105,11 @@ process_application(Node, S=#state{}) ->
 		   {[],S}
 	end.
 
+process_variable(Node, S=#state{}) ->
+	VarName = erl_syntax:variable_literal(Node),
+	NewState = write_symbol_to_db(?SYMBOL_MARK, VarName, Node, S),
+	{[],NewState}.
+  
 %% ====================================================================
 %% Functions for writing to the file
 %% ====================================================================
@@ -136,6 +137,8 @@ write_symbol_to_db(?FUNCTION_END_MARK, _Name, _Node, S=#state{}) ->
 	NewLine = S#state.line_no+1,
 	S#state{line_no=NewLine,pos=1};
 
+
+%% ============================================================
 %% Format for other symbols
 %% <line number><blank><non-symbol text>
 %% <optional mark><symbol>
@@ -148,6 +151,7 @@ write_symbol_to_db(?FUNCTION_END_MARK, _Name, _Node, S=#state{}) ->
 %% string  constants.
 %% whitespaces are already removed when saving the lines in 
 %% the state
+%% ============================================================
 
 write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 	Fd = S#state.db,
