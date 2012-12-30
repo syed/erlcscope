@@ -15,7 +15,7 @@ git clone https://github.com/syed/erlcscope.git
 cd erlcscope
 ```
 By default erlcscope will install the binary in `/usr/local/bin`. If you want to change the default
-location edit `DEST_BIN` the variable in the Makefile. 
+location edit the `DEST_BIN` variable in the Makefile. 
 
 erlcscope uses `rebar` present in its directory for compilation. If you want to use a different
 version of `rebar` or add some extra paramaters, edit the `REBAR` variable in the Makefile
