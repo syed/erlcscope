@@ -1,5 +1,5 @@
 CP=cp
-DEST_BIN=~/bin
+DEST_BIN=/usr/local/bin
 PROG=erlcscope
 REBAR=./rebar
 

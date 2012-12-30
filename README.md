@@ -14,7 +14,7 @@ Requires Erlang and `escript` installed.
 git clone https://github.com/syed/erlcscope.git
 cd erlcscope
 ```
-By default erlcscope install the binary in `/usr/local/bin`. If you want to change the default
+By default erlcscope will install the binary in `/usr/local/bin`. If you want to change the default
 location edit `DEST_BIN` the variable in the Makefile. 
 
 erlcscope uses `rebar` present in its directory for compilation. If you want to use a different
