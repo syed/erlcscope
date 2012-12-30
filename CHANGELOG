@@ -1,0 +1,4 @@
+Version 1.0.0
+
+    * inital release, supports lookup of function definition, calls to functions
+      variable and atoms.

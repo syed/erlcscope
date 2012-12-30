@@ -1,6 +1,6 @@
 {application,erlcscope,
              [{description,[]},
-              {vsn,"1"},
+              {vsn,"1.0.0"},
               {registered,[]},
               {applications,[kernel,stdlib]},
               {mod,{erlcscope_app,[]}},
