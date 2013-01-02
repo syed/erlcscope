@@ -98,8 +98,24 @@ process_atom(Node, S=#state{}) ->
 	end.
 
 
-process_attribute(_Node,S=#state{}) ->
- 	{[],S}.
+process_attribute(Node,S=#state{}) ->
+	%io:format("node ~p~n",[Node]),
+	%io:format("attr name ~p~n",[erl_syntax:atom_value(erl_syntax:attribute_name(Node))]),
+	Type = erl_syntax:atom_value(erl_syntax:attribute_name(Node)),
+	case Type of
+		define ->
+			%io:format("subtree ~p~n",[erl_syntax:attribute_arguments(Node)]),
+			[Def | Subtree] = erl_syntax:attribute_arguments(Node),
+			Name = get_define_name(Def),
+			%io:format("name ~p len ~p pos ~p~n",[Name,length(Name), erl_syntax:get_pos(Def)]),
+			NewState1 = write_symbol_to_db(?MACRO_MARK, Name, Def, S),
+			NewState2 = traverse_tree([Subtree], NewState1),
+			NewState3 = write_symbol_to_db(?MACRO_END_MARK, "" , Node, NewState2),
+			{[],NewState3};
+		_ -> 
+			{[],S}
+	end.
+ 	
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of 
@@ -140,16 +156,6 @@ init_symbol_db(Db, TrailerOffset ) ->
 write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
 	io:format(S#state.db,"~s~s~n~n", [?FILE_MARK, Fname]);
 
-% XXX: This assumes that there won't be two functions in the same line ... 
-write_symbol_to_db(?FUNCTION_END_MARK, _Name, _Node, S=#state{}) ->
-	% write the left over bytes
-	Line = lists:nth(S#state.line_no, S#state.data),
-	io:format(S#state.db, "~s~n~n", [string:sub_string(Line, S#state.pos)]),
-	io:format(S#state.db,"~s~n~n", [?FUNCTION_END_MARK]),
-	NewLine = S#state.line_no+1,
-	S#state{line_no=NewLine,pos=1};
-
-
 %% ============================================================
 %% Format for other symbols
 %% <line number><blank><non-symbol text>
@@ -168,7 +174,9 @@ write_symbol_to_db(?FUNCTION_END_MARK, _Name, _Node, S=#state{}) ->
 write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 	Fd = S#state.db,
 	LineNo = erl_syntax:get_pos(Node),
+	%io:format("LineNo ~p~n",[LineNo]),
 	Line = lists:nth(LineNo, S#state.data),
+	%io:format("Line ~p~n",[Line]),
 	SearchPos = case S#state.line_no == LineNo of 
 		true -> S#state.pos;
 		false -> 1 % new line, start from pos 1
@@ -201,7 +209,18 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 	  false -> % cannot find this name
 		 S
 	end; % Foundlen > 0
-		
+
+% XXX: This assumes that there won't be two functions in the same line ...
+% called for CLOSE of FUNCTION/MACRO
+ 
+write_symbol_to_db(Type, "", _Node, S=#state{}) ->
+	% write the left over bytes
+	Line = lists:nth(S#state.line_no, S#state.data),
+	io:format(S#state.db, "~s~n", [string:sub_string(Line, S#state.pos)]),
+	io:format(S#state.db,"~s~n~n", [Type]),
+	%NewLine = S#state.line_no+1,
+	%S#state{line_no=NewLine,pos=1};
+	S;
 	
 write_symbol_to_db(_Type, _Name, _Node, S=#state{}) ->
 	S.
@@ -221,6 +240,18 @@ write_symbol_trailer_to_db(Db,Files) ->
 %% ====================================================================
 %% Other utility functions
 %% ====================================================================
+
+% returns the name in -define(Name,...)
+
+get_define_name(Def) ->
+	case erl_syntax:type(Def) of
+		variable ->
+			erl_syntax:variable_literal(Def);
+		application ->
+			get_define_name(erl_syntax:application_operator(Def));
+		atom -> 
+			erl_syntax:atom_literal(Def)
+	end.
 
 % splits string into a list of strings delimeted by newline.
 % blank lines are saved as empty lists. The library function
@@ -265,6 +296,6 @@ find_source_files(Path) ->
 				end, [], Files).
 
 
-%debug_print_state(S=#state{}) ->
-%	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
+debug_print_state(S=#state{}) ->
+	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
 
