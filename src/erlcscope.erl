@@ -17,7 +17,7 @@ main(InPath)->
 	case filelib:is_regular(filename:join(InPath, ?INPUT_FILE)) of
 	 	true->	
 			io:format("Using source files from ~s~n",[?INPUT_FILE]),
-			{ok, Data} = file:read_file(filename:join(InPath, ?INPUT_FILE)),
+			{ok, Data} = file:read_file(?INPUT_FILE),
 	 		Files = lists:sort(string:tokens(binary_to_list(Data), ?NEWLINE_SEP));
 		false ->
 			io:format("Searching for source files ...~n"),
