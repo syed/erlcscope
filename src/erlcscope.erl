@@ -22,7 +22,7 @@ main(InPath)->
 		false ->
 			io:format("Searching for source files ...~n"),
 			Files = find_source_files(InPath),
-			{ok, FilesFd} = file:open(filename:join(InPath, ?INPUT_FILE), [write]),
+			{ok, FilesFd} = file:open(?INPUT_FILE, [write]),
 			lists:foreach(fun(File) -> io:format(FilesFd, "~s~n", [File]) end, Files),
 			file:close(FilesFd)
 	end,
