@@ -46,7 +46,7 @@ Right now erlcscope supports lookup of atoms,variables and functions. The main a
 over ctags is that it can also lookup where a function is called from instead of just the function 
 definition.
 
-If you are using vim and want to setup cscope, [this](http://cscope.sourceforge.net/cscope_vim_tutorial.html tutorial) tutorial details the process very nicely.
+If you are using vim and want to setup cscope, [this](http://cscope.sourceforge.net/cscope_vim_tutorial.html) tutorial details the process very nicely.
 
 
 Screenshots
