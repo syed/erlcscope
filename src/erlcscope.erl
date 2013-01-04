@@ -104,18 +104,22 @@ process_attribute(Node,S=#state{}) ->
 	Type = erl_syntax:atom_value(erl_syntax:attribute_name(Node)),
 	case Type of
 		define ->
-			%io:format("subtree ~p~n",[erl_syntax:attribute_arguments(Node)]),
-			[Def | Subtree] = erl_syntax:attribute_arguments(Node),
-			Name = get_define_name(Def),
-			%io:format("name ~p len ~p pos ~p~n",[Name,length(Name), erl_syntax:get_pos(Def)]),
-			NewState1 = write_symbol_to_db(?MACRO_MARK, Name, Def, S),
-			NewState2 = traverse_tree([Subtree], NewState1),
-			NewState3 = write_symbol_to_db(?MACRO_END_MARK, "" , Node, NewState2),
-			{[],NewState3};
+			process_define(Node,S);
+		record ->
+			process_record(Node,S);
 		_ -> 
 			{[],S}
 	end.
  	
+process_define(Node,S=#state{}) ->
+	%io:format("subtree ~p~n",[erl_syntax:attribute_arguments(Node)]),
+	[Def | Subtree] = erl_syntax:attribute_arguments(Node),
+	Name = get_define_name(Def),
+	%io:format("name ~p len ~p pos ~p~n",[Name,length(Name), erl_syntax:get_pos(Def)]),
+	NewState1 = write_symbol_to_db(?MACRO_MARK, Name, Def, S),
+	NewState2 = traverse_tree([Subtree], NewState1),
+	NewState3 = write_symbol_to_db(?MACRO_END_MARK, "" , Node, NewState2),
+	{[],NewState3}.
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of 
@@ -132,6 +136,16 @@ process_function(Node, S=#state{}) ->
 			{[], S}
 	end.
 		
+
+process_record(Node, S=#state{}) ->
+	try erl_syntax_lib:analyze_record_attribute(Node) of
+		{RecName, _Fields}  -> 
+			NewState1 = write_symbol_to_db(?RECORD_DEF_MARK, atom_to_list(RecName), Node, S),
+			{[] , write_symbol_to_db(?RECORD_DEF_END_MARK, "", Node, NewState1) }
+	catch 
+		syntax_error ->
+			{[],S}
+	end.
 
 process_variable(Node, S=#state{}) ->
 	VarName = erl_syntax:variable_literal(Node),
@@ -182,6 +196,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 		false -> 1 % new line, start from pos 1
     end,
 	FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
+	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
 	case FoundLen > 0 of 
 	   true ->
 		 StartPos = 

@@ -9,7 +9,8 @@
 -define(FUNCTION_DEF_MARK, "\t$").
 -define(FUNCTION_END_MARK, "\t}").
 -define(INCLUDE_MARK, "\t~").
--define(RECORD_DEF_MARK, "\tm").
+-define(RECORD_DEF_MARK, "\ts").
+-define(RECORD_DEF_END_MARK, "\t;").
 -define(SYMBOL_MARK, "").
 
 
