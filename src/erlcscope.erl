@@ -38,9 +38,8 @@ main(InPath)->
 
 pmap(F, L) ->
 	Self = self(),
-	RespRefs = lists:map(fun(I) -> Ref = make_ref(), spawn(?MODULE, pmap_e, [F, I, Self, Ref]), Ref end, L),
-	Responses = lists:map(fun(Ref) -> receive {Ref, Resp} -> Resp end end, RespRefs),
-	Responses
+	RespRefs = [begin Ref = make_ref(), spawn(?MODULE, pmap_e, [F, I, Self, Ref]), Ref end || I <- L],
+	[receive {Ref, Resp} -> Resp end || Ref <- RespRefs]
 	.
 
 pmap_e(F, A, ReplyTo, Ref) ->
@@ -56,7 +55,7 @@ build_symbol_db_from_file(SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
 	io:format("processing ~p~n",[SrcFile]),
 	Lines = split_data_to_lines(binary_to_list(FileData)),
-	State = #state{data=Lines},
+	State = #state{data=array:from_list(Lines)},
 	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
@@ -204,7 +203,7 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{entries = Entries}) ->
 write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Name) > 0 ->
 	LineNo = erl_syntax:get_pos(Node),
 	%io:format("LineNo ~p~n",[LineNo]),
-	Line = lists:nth(LineNo, S#state.data),
+	Line = array:get(LineNo-1, S#state.data),
 	%io:format("Line ~p~n",[Line]),
 	SearchPos = case S#state.line_no == LineNo of 
 		true -> S#state.pos;
@@ -219,7 +218,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
 				OldLine = if S#state.line_no > 0 ->
-					lists:nth(S#state.line_no, S#state.data);
+					array:get(S#state.line_no-1, S#state.data);
 					true -> ""
 				end,
 				{1, f("~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo])};
@@ -244,7 +243,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
  
 write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
-	Line = lists:nth(S#state.line_no, S#state.data),
+	Line = array:get(S#state.line_no-1, S#state.data),
 	L = f("~s~n~s~n~n", [string:sub_string(Line, S#state.pos), Type]),
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
