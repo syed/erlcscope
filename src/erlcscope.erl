@@ -7,7 +7,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([start_link/0,main/1]).
+-export([start_link/0,main/1,pmap_e/4]).
 
 start_link()->
 	Pid = spawn_link(fun main/1),
@@ -28,24 +28,39 @@ main(InPath)->
 	end,
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
-	lists:foreach(fun(Fname) -> 
-		build_symbol_db_from_file(Db,Fname) end, 
+	Entries = pmap(fun(Fname) -> 
+			S = build_symbol_db_from_file(Fname),
+			lists:flatten(lists:reverse(S#state.entries))
+		end, 
 	Files),
+	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
 	write_symbol_trailer_to_db(Db, Files).
+
+pmap(F, L) ->
+	Self = self(),
+	RespRefs = lists:map(fun(I) -> Ref = make_ref(), spawn(?MODULE, pmap_e, [F, I, Self, Ref]), Ref end, L),
+	Responses = lists:map(fun(Ref) -> receive {Ref, Resp} -> Resp end end, RespRefs),
+	Responses
+	.
+
+pmap_e(F, A, ReplyTo, Ref) ->
+	R = F(A),
+	ReplyTo ! {Ref, R}
+	.
 
 %% ====================================================================
 %% Parsing and processing functions
 %% ====================================================================
 
-build_symbol_db_from_file(Db, SrcFile) ->
+build_symbol_db_from_file(SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
 	io:format("processing ~p~n",[SrcFile]),
 	Lines = split_data_to_lines(binary_to_list(FileData)),
-	State = #state{db=Db,data=Lines},
-	write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
+	State = #state{data=Lines},
+	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
-	traverse_tree([ParseTree],State).
+	traverse_tree([ParseTree],NewState).
 
 
 traverse_tree(TreeList, S=#state{}) ->
@@ -167,8 +182,9 @@ init_symbol_db(Db, TrailerOffset ) ->
 %% <file mark><file path>
 %% <empty line>
 
-write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
-	io:format(S#state.db,"~s~s~n~n", [?FILE_MARK, Fname]);
+write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{entries = Entries}) ->
+	Line = f("~s~s~n~n", [?FILE_MARK, Fname]),
+	S#state{entries = [Line | Entries]};
 
 %% ============================================================
 %% Format for other symbols
@@ -185,8 +201,7 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
 %% the state
 %% ============================================================
 
-write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
-	Fd = S#state.db,
+write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Name) > 0 ->
 	LineNo = erl_syntax:get_pos(Node),
 	%io:format("LineNo ~p~n",[LineNo]),
 	Line = lists:nth(LineNo, S#state.data),
@@ -199,7 +214,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
 	case FoundLen > 0 of 
 	   true ->
-		 StartPos = 
+		{StartPos, L1} = 
 		 if (LineNo =/= S#state.line_no) ->
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
@@ -207,20 +222,19 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 					lists:nth(S#state.line_no, S#state.data);
 					true -> ""
 				end,
-				io:format(Fd,"~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo]),
-				1;
+				{1, f("~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo])};
 			true ->  % same line , no update needed
-	  			S#state.pos 
+				{S#state.pos, ""}
 		 end, % (LineNo =/= S#state.line_no)
 		 
 		 
 		 EndPos = StartPos + FoundLen -1,
 		 NonSymbolData =  string:substr(Line, StartPos , EndPos - StartPos),
 		 % write non symbol data
-		 io:format(Fd,"~s~n",[NonSymbolData]),
+		 L2 = f("~s~n",[NonSymbolData]),
 		 % write symbol data
-		 io:format(Fd,"~s~s~n",[Type,Name]),
-		 S#state{line_no=LineNo, pos=EndPos + length(Name)};
+		 L3 = f("~s~s~n",[Type,Name]),
+		 S#state{line_no=LineNo, pos=EndPos + length(Name), entries = [lists:flatten([L1, L2, L3]) | Entries]};
 	  false -> % cannot find this name
 		 S
 	end; % Foundlen > 0
@@ -228,14 +242,13 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 % XXX: This assumes that there won't be two functions in the same line ...
 % called for CLOSE of FUNCTION/MACRO
  
-write_symbol_to_db(Type, "", _Node, S=#state{}) ->
+write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
 	Line = lists:nth(S#state.line_no, S#state.data),
-	io:format(S#state.db, "~s~n", [string:sub_string(Line, S#state.pos)]),
-	io:format(S#state.db,"~s~n~n", [Type]),
+	L = f("~s~n~s~n~n", [string:sub_string(Line, S#state.pos), Type]),
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
-	S;
+	S#state{entries = [L | Entries]};
 	
 write_symbol_to_db(_Type, _Name, _Node, S=#state{}) ->
 	S.
@@ -314,3 +327,6 @@ find_source_files(Path) ->
 debug_print_state(S=#state{}) ->
 	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
 
+f(F, A) ->
+	lists:flatten(io_lib:format(F, A))
+	.
