@@ -54,7 +54,8 @@ pmap_e(F, A, ReplyTo, Ref) ->
 build_symbol_db_from_file(SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
 	io:format("processing ~p~n",[SrcFile]),
-	Lines = split_data_to_lines(binary_to_list(FileData)),
+	FileData1 = re:replace(FileData, "[\r \t]+", " ", [global, {return, binary}]),
+	Lines = binary:split(FileData1, <<"\n">>, [global]),
 	State = #state{data=array:from_list(Lines)},
 	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
@@ -203,12 +204,12 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{entries = Entries}) ->
 write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Name) > 0 ->
 	LineNo = erl_syntax:get_pos(Node),
 	%io:format("LineNo ~p~n",[LineNo]),
-	Line = array:get(LineNo-1, S#state.data),
+	Line = binary_to_list(array:get(LineNo-1, S#state.data)),
 	%io:format("Line ~p~n",[Line]),
 	SearchPos = case S#state.line_no == LineNo of 
 		true -> S#state.pos;
 		false -> 1 % new line, start from pos 1
-    end,
+	end,
 	FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
 	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
 	case FoundLen > 0 of 
@@ -218,7 +219,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
 				OldLine = if S#state.line_no > 0 ->
-					array:get(S#state.line_no-1, S#state.data);
+					binary_to_list(array:get(S#state.line_no-1, S#state.data));
 					true -> ""
 				end,
 				{1, f("~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo])};
@@ -243,7 +244,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
  
 write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
-	Line = array:get(S#state.line_no-1, S#state.data),
+	Line = binary_to_list(array:get(S#state.line_no-1, S#state.data)),
 	L = f("~s~n~s~n~n", [string:sub_string(Line, S#state.pos), Type]),
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
@@ -279,28 +280,6 @@ get_define_name(Def) ->
 		atom -> 
 			erl_syntax:atom_literal(Def)
 	end.
-
-% splits string into a list of strings delimeted by newline.
-% blank lines are saved as empty lists. The library function
-% string:tokens() discards blank lines. 
-
-split_data_to_lines(Data) ->
-	split_data_to_lines(Data,[],[]).
-
-split_data_to_lines([],Acc,Out)->
-	lists:reverse([Acc|Out]);
-
-split_data_to_lines([Ch|Rem], Acc, Out) ->
-	case Ch == $\n of
-		true -> split_data_to_lines(Rem, [], [ lists:reverse(remove_spaces(Acc)) | Out ]);
-		false -> split_data_to_lines(Rem, [Ch|Acc], Out )
-	end.
-
-% simple function which replaces multiple spaces with single space
-
-remove_spaces(String) ->
-	re:replace(String, "\\s+", " ", [global, {return, list}]).
-
 
 % recursively find erlang files, returns a list of filenames
 
