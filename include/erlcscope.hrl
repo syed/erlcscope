@@ -1,4 +1,4 @@
--record(state, { pos=1, line_no=0, data=[], db}).
+-record(state, { pos=1, line_no=0, data=[], entries=[]}).
 
 
 %% Markers used in cscope database

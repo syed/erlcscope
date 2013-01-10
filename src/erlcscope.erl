@@ -7,7 +7,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([start_link/0,main/1]).
+-export([start_link/0,main/1, pmap_lim_run/3]).
 
 start_link()->
 	Pid = spawn_link(fun main/1),
@@ -28,24 +28,60 @@ main(InPath)->
 	end,
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
-	lists:foreach(fun(Fname) -> 
-		build_symbol_db_from_file(Db,Fname) end, 
-	Files),
-	write_symbol_trailer_to_db(Db, Files).
+	Sched = erlang:system_info(schedulers),
+	Entries = pmap_lim(fun(Fname) ->
+			S = build_symbol_db_from_file(Fname),
+			list_to_binary(lists:reverse(S#state.entries))
+		end, 
+	Files, Sched),
+	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
+	write_symbol_trailer_to_db(Db, Files),
+	io:format("Processed ~b files~n", [length(Files)])
+	.
+
+pmap_lim(F, L, Lim) ->
+	Self = self(),
+	NumberedL = lists:zip(lists:seq(0, length(L)-1), L),
+	{Running, Waiting} = lists:split(Lim, NumberedL),
+	[spawn(?MODULE, pmap_lim_run, [F, Self, I]) || I <- Running],
+	pmap_lim1(F, Waiting, array:new(length(L)), Lim)
+	.
+
+pmap_lim1(_F, [], Results, 0) ->
+	array:to_list(Results);
+pmap_lim1(F, [], Results, Outstanding) ->
+	receive
+		{N, R} ->
+			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1)
+	end
+	;
+pmap_lim1(F, [Next | Waiting], Results, Lim) ->
+	receive
+		{N, R} ->
+			spawn(?MODULE, pmap_lim_run, [F, self(), Next]),
+			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim)
+	end
+	.
+
+pmap_lim_run(F, ReplyTo, {N, I}) ->
+	R = F(I),
+	ReplyTo ! {N, R}
+	.
 
 %% ====================================================================
 %% Parsing and processing functions
 %% ====================================================================
 
-build_symbol_db_from_file(Db, SrcFile) ->
+build_symbol_db_from_file(SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
-	io:format("processing ~p~n",[SrcFile]),
-	Lines = split_data_to_lines(binary_to_list(FileData)),
-	State = #state{db=Db,data=Lines},
-	write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
+	%io:format("processing ~p~n",[SrcFile]),
+	FileData1 = re:replace(FileData, "[\r \t]+", " ", [global, {return, binary}]),
+	Lines = binary:split(FileData1, <<"\n">>, [global]),
+	State = #state{data=array:from_list(Lines)},
+	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
-	traverse_tree([ParseTree],State).
+	traverse_tree([ParseTree],NewState).
 
 
 traverse_tree(TreeList, S=#state{}) ->
@@ -167,8 +203,9 @@ init_symbol_db(Db, TrailerOffset ) ->
 %% <file mark><file path>
 %% <empty line>
 
-write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
-	io:format(S#state.db,"~s~s~n~n", [?FILE_MARK, Fname]);
+write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{entries = Entries}) ->
+	Line = f("~s~s~n~n", [?FILE_MARK, Fname]),
+	S#state{entries = [Line | Entries]};
 
 %% ============================================================
 %% Format for other symbols
@@ -185,42 +222,40 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{}) ->
 %% the state
 %% ============================================================
 
-write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
-	Fd = S#state.db,
+write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Name) > 0 ->
 	LineNo = erl_syntax:get_pos(Node),
 	%io:format("LineNo ~p~n",[LineNo]),
-	Line = lists:nth(LineNo, S#state.data),
+	Line = binary_to_list(array:get(LineNo-1, S#state.data)),
 	%io:format("Line ~p~n",[Line]),
 	SearchPos = case S#state.line_no == LineNo of 
 		true -> S#state.pos;
 		false -> 1 % new line, start from pos 1
-    end,
+	end,
 	FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
 	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
 	case FoundLen > 0 of 
 	   true ->
-		 StartPos = 
+		{StartPos, L1} = 
 		 if (LineNo =/= S#state.line_no) ->
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
 				OldLine = if S#state.line_no > 0 ->
-					lists:nth(S#state.line_no, S#state.data);
+					binary_to_list(array:get(S#state.line_no-1, S#state.data));
 					true -> ""
 				end,
-				io:format(Fd,"~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo]),
-				1;
+				{1, f("~s~n~n~b ", [string:substr(OldLine,S#state.pos), LineNo])};
 			true ->  % same line , no update needed
-	  			S#state.pos 
+				{S#state.pos, ""}
 		 end, % (LineNo =/= S#state.line_no)
 		 
 		 
 		 EndPos = StartPos + FoundLen -1,
 		 NonSymbolData =  string:substr(Line, StartPos , EndPos - StartPos),
 		 % write non symbol data
-		 io:format(Fd,"~s~n",[NonSymbolData]),
+		 L2 = f("~s~n",[NonSymbolData]),
 		 % write symbol data
-		 io:format(Fd,"~s~s~n",[Type,Name]),
-		 S#state{line_no=LineNo, pos=EndPos + length(Name)};
+		 L3 = f("~s~s~n",[Type,Name]),
+		 S#state{line_no=LineNo, pos=EndPos + length(Name), entries = [lists:flatten([L1, L2, L3]) | Entries]};
 	  false -> % cannot find this name
 		 S
 	end; % Foundlen > 0
@@ -228,14 +263,13 @@ write_symbol_to_db(Type, Name, Node, S=#state{}) when length(Name) > 0 ->
 % XXX: This assumes that there won't be two functions in the same line ...
 % called for CLOSE of FUNCTION/MACRO
  
-write_symbol_to_db(Type, "", _Node, S=#state{}) ->
+write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
-	Line = lists:nth(S#state.line_no, S#state.data),
-	io:format(S#state.db, "~s~n", [string:sub_string(Line, S#state.pos)]),
-	io:format(S#state.db,"~s~n~n", [Type]),
+	Line = binary_to_list(array:get(S#state.line_no-1, S#state.data)),
+	L = f("~s~n~s~n~n", [string:sub_string(Line, S#state.pos), Type]),
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
-	S;
+	S#state{entries = [L | Entries]};
 	
 write_symbol_to_db(_Type, _Name, _Node, S=#state{}) ->
 	S.
@@ -268,28 +302,6 @@ get_define_name(Def) ->
 			erl_syntax:atom_literal(Def)
 	end.
 
-% splits string into a list of strings delimeted by newline.
-% blank lines are saved as empty lists. The library function
-% string:tokens() discards blank lines. 
-
-split_data_to_lines(Data) ->
-	split_data_to_lines(Data,[],[]).
-
-split_data_to_lines([],Acc,Out)->
-	lists:reverse([Acc|Out]);
-
-split_data_to_lines([Ch|Rem], Acc, Out) ->
-	case Ch == $\n of
-		true -> split_data_to_lines(Rem, [], [ lists:reverse(remove_spaces(Acc)) | Out ]);
-		false -> split_data_to_lines(Rem, [Ch|Acc], Out )
-	end.
-
-% simple function which replaces multiple spaces with single space
-
-remove_spaces(String) ->
-	re:replace(String, "\\s+", " ", [global, {return, list}]).
-
-
 % recursively find erlang files, returns a list of filenames
 
 find_source_files(Path) ->
@@ -314,3 +326,6 @@ find_source_files(Path) ->
 debug_print_state(S=#state{}) ->
 	io:format("line ~p, pos ~p~n",[S#state.line_no, S#state.pos]).
 
+f(F, A) ->
+	lists:flatten(io_lib:format(F, A))
+	.
