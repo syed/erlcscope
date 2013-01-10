@@ -7,7 +7,7 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([start_link/0,main/1,pmap_e/4]).
+-export([start_link/0,main/1, pmap_lim_run/3]).
 
 start_link()->
 	Pid = spawn_link(fun main/1),
@@ -28,23 +28,44 @@ main(InPath)->
 	end,
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
-	Entries = pmap(fun(Fname) -> 
+	Sched = erlang:system_info(schedulers),
+	Entries = pmap_lim(fun(Fname) ->
 			S = build_symbol_db_from_file(Fname),
-			lists:flatten(lists:reverse(S#state.entries))
+			list_to_binary(lists:reverse(S#state.entries))
 		end, 
-	Files),
+	Files, Sched),
 	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
-	write_symbol_trailer_to_db(Db, Files).
-
-pmap(F, L) ->
-	Self = self(),
-	RespRefs = [begin Ref = make_ref(), spawn(?MODULE, pmap_e, [F, I, Self, Ref]), Ref end || I <- L],
-	[receive {Ref, Resp} -> Resp end || Ref <- RespRefs]
+	write_symbol_trailer_to_db(Db, Files),
+	io:format("Processed ~b files~n", [length(Files)])
 	.
 
-pmap_e(F, A, ReplyTo, Ref) ->
-	R = F(A),
-	ReplyTo ! {Ref, R}
+pmap_lim(F, L, Lim) ->
+	Self = self(),
+	NumberedL = lists:zip(lists:seq(0, length(L)-1), L),
+	{Running, Waiting} = lists:split(Lim, NumberedL),
+	[spawn(?MODULE, pmap_lim_run, [F, Self, I]) || I <- Running],
+	pmap_lim1(F, Waiting, array:new(length(L)), Lim)
+	.
+
+pmap_lim1(_F, [], Results, 0) ->
+	array:to_list(Results);
+pmap_lim1(F, [], Results, Outstanding) ->
+	receive
+		{N, R} ->
+			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1)
+	end
+	;
+pmap_lim1(F, [Next | Waiting], Results, Lim) ->
+	receive
+		{N, R} ->
+			spawn(?MODULE, pmap_lim_run, [F, self(), Next]),
+			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim)
+	end
+	.
+
+pmap_lim_run(F, ReplyTo, {N, I}) ->
+	R = F(I),
+	ReplyTo ! {N, R}
 	.
 
 %% ====================================================================
@@ -53,7 +74,7 @@ pmap_e(F, A, ReplyTo, Ref) ->
 
 build_symbol_db_from_file(SrcFile) ->
 	{ok, FileData} = file:read_file(SrcFile),
-	io:format("processing ~p~n",[SrcFile]),
+	%io:format("processing ~p~n",[SrcFile]),
 	FileData1 = re:replace(FileData, "[\r \t]+", " ", [global, {return, binary}]),
 	Lines = binary:split(FileData1, <<"\n">>, [global]),
 	State = #state{data=array:from_list(Lines)},
