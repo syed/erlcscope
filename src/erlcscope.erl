@@ -15,7 +15,7 @@ start_link()->
 
 main(InPath)->
 	case filelib:is_regular(filename:join(InPath, ?INPUT_FILE)) of
-	 	true->	
+	 	true->
 			io:format("Using source files from ~s~n",[?INPUT_FILE]),
 			{ok, Data} = file:read_file(?INPUT_FILE),
 	 		Files = lists:sort(string:tokens(binary_to_list(Data), ?NEWLINE_SEP));
@@ -85,7 +85,7 @@ build_symbol_db_from_file(SrcFile) ->
 
 
 traverse_tree(TreeList, S=#state{}) ->
-	lists:foldl( 
+	lists:foldl(
 	fun(NodeList,S2) ->
 		lists:foldl(fun(Node,State) ->
 			%io:format("Node ~p~n", [Node]),
@@ -103,21 +103,21 @@ traverse_tree(TreeList, S=#state{}) ->
 
 process_application(Node, S=#state{}) ->
 	%io:format("application ~p~n",[erl_syntax_lib:analyze_application(Node)]),
-	try erl_syntax_lib:analyze_application(Node) of 
+	try erl_syntax_lib:analyze_application(Node) of
 		{ _ModName, {Fname, _Airity} } ->
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
 			{[ApplicationArgs],NewState};
-		{ Fname, _Arity } -> 
+		{ Fname, _Arity } ->
 			Name = atom_to_list(Fname),
 			NewState = write_symbol_to_db(?FUNCTION_CALL_MARK, Name, Node, S),
 			[[_ApplicationOperator], ApplicationArgs ] = erl_syntax:subtrees(Node),
 			{[ApplicationArgs],NewState};
 		_ ->
 			{[],S}
-	catch 
-		syntax_error -> 
+	catch
+		syntax_error ->
 		   {[],S}
 	end.
 
@@ -158,8 +158,8 @@ process_define(Node,S=#state{}) ->
 	{[],NewState3}.
 
 process_function(Node, S=#state{}) ->
-	try erl_syntax_lib:analyze_function(Node) of 
-		{FAtom, _FArity} -> 
+	try erl_syntax_lib:analyze_function(Node) of
+		{FAtom, _FArity} ->
 			Fname = atom_to_list(FAtom),
 		 	%io:format("function ~s~n",[Fname]),
 			NewState1 = write_symbol_to_db(?FUNCTION_DEF_MARK, Fname, Node, S),
@@ -167,11 +167,11 @@ process_function(Node, S=#state{}) ->
 			NewState2 = traverse_tree([ClauseTree], NewState1),
 			NewState3 = write_symbol_to_db(?FUNCTION_END_MARK, "", Node, NewState2),
 	        {[], NewState3}
-	catch 
+	catch
 		syntax_error ->
 			{[], S}
 	end.
-		
+
 
 process_record(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_record_attribute(Node) of
@@ -187,19 +187,19 @@ process_variable(Node, S=#state{}) ->
 	VarName = erl_syntax:variable_literal(Node),
 	NewState = write_symbol_to_db(?SYMBOL_MARK, VarName, Node, S),
 	{[],NewState}.
-  
+
 %% ====================================================================
 %% Functions for writing to the file
 %% ====================================================================
 
 init_symbol_db(Db, TrailerOffset ) ->
 	{ok, Cwd} = file:get_cwd(),
-	Header = lists:flatten(io_lib:format("cscope ~s ~s -c ~10..0b~n", 
+	Header = lists:flatten(io_lib:format("cscope ~s ~s -c ~10..0b~n",
 									[?CSCOPE_VERSION, Cwd,TrailerOffset])),
 	io:format(Db,"~s",[Header]).
 
 
-%% Format For File      
+%% Format For File
 %% <file mark><file path>
 %% <empty line>
 
@@ -218,7 +218,7 @@ write_symbol_to_db(?FILE_MARK, Fname, _Node , S=#state{entries = Entries}) ->
 %% removed. Tabs are changed to blanks, and multiple blanks
 %% are squeezed to a single  blank,  even  in  character  and
 %% string  constants.
-%% whitespaces are already removed when saving the lines in 
+%% whitespaces are already removed when saving the lines in
 %% the state
 %% ============================================================
 
@@ -227,7 +227,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 	%io:format("LineNo ~p~n",[LineNo]),
 	Line = binary_to_list(array:get(LineNo-1, S#state.data)),
 	%io:format("Line ~p~n",[Line]),
-	SearchPos = case S#state.line_no == LineNo of 
+	SearchPos = case S#state.line_no == LineNo of
 		true -> S#state.pos;
 		false -> 1 % new line, start from pos 1
 	end,
@@ -247,8 +247,8 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 			true ->  % same line , no update needed
 				{S#state.pos, ""}
 		 end, % (LineNo =/= S#state.line_no)
-		 
-		 
+
+
 		 EndPos = StartPos + FoundLen -1,
 		 NonSymbolData =  string:substr(Line, StartPos , EndPos - StartPos),
 		 % write non symbol data
@@ -298,7 +298,7 @@ get_define_name(Def) ->
 			erl_syntax:variable_literal(Def);
 		application ->
 			get_define_name(erl_syntax:application_operator(Def));
-		atom -> 
+		atom ->
 			erl_syntax:atom_literal(Def)
 	end.
 
@@ -307,20 +307,24 @@ get_define_name(Def) ->
 find_source_files(Path) ->
 	{ok, Files} = file:list_dir(Path),
 	lists:foldr(fun(F,Acc) ->
-				File = filename:join(Path, F),
-				{ok, Info=#file_info{}} = file:read_file_info(File),
-				case Info#file_info.type of 
-					directory -> 
+		File = filename:join(Path, F),
+		case file:read_file_info(File) of
+			{ok, Info=#file_info{}} ->
+				case Info#file_info.type of
+					directory ->
 						find_source_files(File) ++ Acc;
 					regular ->
-						case lists:member(filename:extension(File), ?ERL_EXTENSIONS) of 
+						case lists:member(filename:extension(File), ?ERL_EXTENSIONS) of
 							true -> [File|Acc];
 							false -> Acc
 						end;
-					_ -> 
+					_ ->
 						Acc
-				end % case end
-				end, [], Files).
+				end;
+			{error, enoent} ->
+				Acc % File doesn't exist, e.g. bad symlink
+		end
+	end, [], Files).
 
 
 debug_print_state(S=#state{}) ->
