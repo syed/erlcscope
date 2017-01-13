@@ -29,11 +29,12 @@ main(InPath)->
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
 	Sched = erlang:system_info(schedulers),
+	Limit = erlang:min(Sched, length(Files)),
 	Entries = pmap_lim(fun(Fname) ->
 			S = build_symbol_db_from_file(Fname),
 			list_to_binary(lists:reverse(S#state.entries))
 		end,
-	Files, Sched),
+	Files, Limit),
 	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
 	write_symbol_trailer_to_db(Db, Files),
 	io:format("Processed ~b files~n", [length(Files)])
