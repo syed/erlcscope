@@ -44,23 +44,41 @@ pmap_lim(F, L, Lim) ->
 	Self = self(),
 	NumberedL = lists:zip(lists:seq(0, length(L)-1), L),
 	{Running, Waiting} = lists:split(Lim, NumberedL),
-	[spawn(?MODULE, pmap_lim_run, [F, Self, I]) || I <- Running],
+	[spawn_and_monitor_helper([F, Self, I]) || I <- Running],
 	pmap_lim1(F, Waiting, array:new(length(L)), Lim)
 	.
+
+spawn_and_monitor_helper(Args) ->
+    Pid = spawn(?MODULE, pmap_lim_run, Args),
+    monitor(process, Pid).
 
 pmap_lim1(_F, [], Results, 0) ->
 	array:to_list(Results);
 pmap_lim1(F, [], Results, Outstanding) ->
 	receive
 		{N, R} ->
-			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1)
+			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1);
+		{'DOWN',_,process,_,normal} ->
+			%% Ignore, we are still waiting for the real message
+			pmap_lim1(F, [], Results, Outstanding);
+		{'DOWN',_,process,_,_} ->
+			pmap_lim1(F, [], Results, Outstanding - 1);
+		Other ->
+		    throw({unexpected_msg,Other})
 	end
 	;
 pmap_lim1(F, [Next | Waiting], Results, Lim) ->
 	receive
 		{N, R} ->
-			spawn(?MODULE, pmap_lim_run, [F, self(), Next]),
-			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim)
+			spawn_and_monitor_helper([F, self(), Next]),
+			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim);
+		{'DOWN',_,process,_,normal} ->
+			pmap_lim1(F, [ Next | Waiting ], Results, Lim);
+		{'DOWN',_,process,_,_} ->
+			spawn_and_monitor_helper([F, self(), Next]),
+			pmap_lim1(F, Waiting, Results, Lim);
+		Other ->
+		    throw({unexpected_msg,Other})
 	end
 	.
 
