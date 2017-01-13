@@ -111,10 +111,9 @@ build_symbol_db_from_file(SrcFile) ->
 				  "Message: ~p~n"
 				  "Stacktrace: ~p~n",
 				  [SrcFile, {E,R}, StackTrace]),
-		io:put_chars(standard_error, ErrorMsg),
+		output_stderr(ErrorMsg),
 		erlang:raise(E, R, {srcfile,SrcFile})
 	end.
-
 
 traverse_tree(TreeList, S=#state{}) ->
 	lists:foldl(
@@ -155,14 +154,20 @@ process_application(Node, S=#state{}) ->
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
-	%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
-	LineNo = erl_syntax:get_pos(Node),
-	if  LineNo > 0 ->
-		NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
-		%io:format("old state ~p, new state ~p~n",[debug_print_state(S), debug_print_state(NewState)]),
-		{[], NewState};
-	true ->
-		{[],S}
+	case AtomName of
+	    '' ->
+		output_stderr("Ignoring atom with name ''\n"),
+		{[],S};
+	    _ ->
+		%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
+		LineNo = erl_syntax:get_pos(Node),
+		if  LineNo > 0 ->
+			NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
+			%io:format("old state ~p, new state ~p~n",[debug_print_state(S), debug_print_state(NewState)]),
+			{[], NewState};
+		true ->
+			{[],S}
+		end
 	end.
 
 
@@ -191,6 +196,9 @@ process_define(Node,S=#state{}) ->
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of
+		{'', _FArity} ->
+			output_stderr("Ignoring function with name ''\n"),
+			{[],S};
 		{FAtom, _FArity} ->
 			Fname = atom_to_list(FAtom),
 		 	%io:format("function ~s~n",[Fname]),
@@ -207,6 +215,9 @@ process_function(Node, S=#state{}) ->
 
 process_record(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_record_attribute(Node) of
+		{'', _Fields} ->
+			output_stderr("Ignoring record with name ''\n"),
+			{[],S};
 		{RecName, _Fields}  ->
 			NewState1 = write_symbol_to_db(?RECORD_DEF_MARK, atom_to_list(RecName), Node, S),
 			{[] , write_symbol_to_db(?RECORD_DEF_END_MARK, "", Node, NewState1) }
@@ -368,3 +379,6 @@ debug_print_state(S=#state{}) ->
 f(F, A) ->
 	lists:flatten(io_lib:format(F, A))
 	.
+
+output_stderr(Str) ->
+	io:put_chars(standard_error, Str).
