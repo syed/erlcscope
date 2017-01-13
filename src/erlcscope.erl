@@ -81,7 +81,20 @@ build_symbol_db_from_file(SrcFile) ->
 	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
-	traverse_tree([ParseTree],NewState).
+	try
+	    traverse_tree([ParseTree],NewState)
+	catch
+	    E:R ->
+		%% rethrow the exception
+		StackTrace = erlang:get_stacktrace(),
+		ErrorMsg =
+		    io_lib:format("ERROR: File ~p caused a bug in erlscope~n"
+				  "Message: ~p~n"
+				  "Stacktrace: ~p~n",
+				  [SrcFile, {E,R}, StackTrace]),
+		io:put_chars(standard_error, ErrorMsg),
+		erlang:raise(E, R, {srcfile,SrcFile})
+	end.
 
 
 traverse_tree(TreeList, S=#state{}) ->
