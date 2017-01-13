@@ -299,7 +299,10 @@ get_define_name(Def) ->
 		application ->
 			get_define_name(erl_syntax:application_operator(Def));
 		atom ->
-			erl_syntax:atom_literal(Def)
+			erl_syntax:atom_literal(Def);
+		underscore ->
+			erl_syntax:underscore()
+
 	end.
 
 % recursively find erlang files, returns a list of filenames
