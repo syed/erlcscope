@@ -32,7 +32,7 @@ main(InPath)->
 	Entries = pmap_lim(fun(Fname) ->
 			S = build_symbol_db_from_file(Fname),
 			list_to_binary(lists:reverse(S#state.entries))
-		end, 
+		end,
 	Files, Sched),
 	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
 	write_symbol_trailer_to_db(Db, Files),
@@ -143,10 +143,10 @@ process_attribute(Node,S=#state{}) ->
 			process_define(Node,S);
 		record ->
 			process_record(Node,S);
-		_ -> 
+		_ ->
 			{[],S}
 	end.
- 	
+
 process_define(Node,S=#state{}) ->
 	%io:format("subtree ~p~n",[erl_syntax:attribute_arguments(Node)]),
 	[Def | Subtree] = erl_syntax:attribute_arguments(Node),
@@ -175,10 +175,10 @@ process_function(Node, S=#state{}) ->
 
 process_record(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_record_attribute(Node) of
-		{RecName, _Fields}  -> 
+		{RecName, _Fields}  ->
 			NewState1 = write_symbol_to_db(?RECORD_DEF_MARK, atom_to_list(RecName), Node, S),
 			{[] , write_symbol_to_db(?RECORD_DEF_END_MARK, "", Node, NewState1) }
-	catch 
+	catch
 		syntax_error ->
 			{[],S}
 	end.
@@ -233,9 +233,9 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 	end,
 	FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
 	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
-	case FoundLen > 0 of 
+	case FoundLen > 0 of
 	   true ->
-		{StartPos, L1} = 
+		{StartPos, L1} =
 		 if (LineNo =/= S#state.line_no) ->
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
@@ -262,7 +262,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 
 % XXX: This assumes that there won't be two functions in the same line ...
 % called for CLOSE of FUNCTION/MACRO
- 
+
 write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
 	Line = binary_to_list(array:get(S#state.line_no-1, S#state.data)),
@@ -270,7 +270,7 @@ write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
 	S#state{entries = [L | Entries]};
-	
+
 write_symbol_to_db(_Type, _Name, _Node, S=#state{}) ->
 	S.
 
