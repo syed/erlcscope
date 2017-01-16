@@ -29,11 +29,12 @@ main(InPath)->
 	{ok, Db} = file:open(?OUTPUT_FILE,[write]),
 	init_symbol_db(Db,0),
 	Sched = erlang:system_info(schedulers),
+	Limit = erlang:min(Sched, length(Files)),
 	Entries = pmap_lim(fun(Fname) ->
 			S = build_symbol_db_from_file(Fname),
 			list_to_binary(lists:reverse(S#state.entries))
-		end, 
-	Files, Sched),
+		end,
+	Files, Limit),
 	lists:foreach(fun(E) -> file:write(Db, E) end, Entries),
 	write_symbol_trailer_to_db(Db, Files),
 	io:format("Processed ~b files~n", [length(Files)])
@@ -43,23 +44,41 @@ pmap_lim(F, L, Lim) ->
 	Self = self(),
 	NumberedL = lists:zip(lists:seq(0, length(L)-1), L),
 	{Running, Waiting} = lists:split(Lim, NumberedL),
-	[spawn(?MODULE, pmap_lim_run, [F, Self, I]) || I <- Running],
+	[spawn_and_monitor_helper([F, Self, I]) || I <- Running],
 	pmap_lim1(F, Waiting, array:new(length(L)), Lim)
 	.
+
+spawn_and_monitor_helper(Args) ->
+    Pid = spawn(?MODULE, pmap_lim_run, Args),
+    monitor(process, Pid).
 
 pmap_lim1(_F, [], Results, 0) ->
 	array:to_list(Results);
 pmap_lim1(F, [], Results, Outstanding) ->
 	receive
 		{N, R} ->
-			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1)
+			pmap_lim1(F, [], array:set(N, R, Results), Outstanding - 1);
+		{'DOWN',_,process,_,normal} ->
+			%% Ignore, we are still waiting for the real message
+			pmap_lim1(F, [], Results, Outstanding);
+		{'DOWN',_,process,_,_} ->
+			pmap_lim1(F, [], Results, Outstanding - 1);
+		Other ->
+		    throw({unexpected_msg,Other})
 	end
 	;
 pmap_lim1(F, [Next | Waiting], Results, Lim) ->
 	receive
 		{N, R} ->
-			spawn(?MODULE, pmap_lim_run, [F, self(), Next]),
-			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim)
+			spawn_and_monitor_helper([F, self(), Next]),
+			pmap_lim1(F, Waiting, array:set(N, R, Results), Lim);
+		{'DOWN',_,process,_,normal} ->
+			pmap_lim1(F, [ Next | Waiting ], Results, Lim);
+		{'DOWN',_,process,_,_} ->
+			spawn_and_monitor_helper([F, self(), Next]),
+			pmap_lim1(F, Waiting, Results, Lim);
+		Other ->
+		    throw({unexpected_msg,Other})
 	end
 	.
 
@@ -81,8 +100,20 @@ build_symbol_db_from_file(SrcFile) ->
 	NewState = write_symbol_to_db(?FILE_MARK, SrcFile, 0, State),
 	{ok, ParseTree} = epp_dodger:parse_file(SrcFile),
 	%io:format("~p",[ParseTree]),
-	traverse_tree([ParseTree],NewState).
-
+	try
+	    traverse_tree([ParseTree],NewState)
+	catch
+	    E:R ->
+		%% rethrow the exception
+		StackTrace = erlang:get_stacktrace(),
+		ErrorMsg =
+		    io_lib:format("ERROR: File ~p caused a bug in erlscope~n"
+				  "Message: ~p~n"
+				  "Stacktrace: ~p~n",
+				  [SrcFile, {E,R}, StackTrace]),
+		output_stderr(ErrorMsg),
+		erlang:raise(E, R, {srcfile,SrcFile})
+	end.
 
 traverse_tree(TreeList, S=#state{}) ->
 	lists:foldl(
@@ -123,14 +154,20 @@ process_application(Node, S=#state{}) ->
 
 process_atom(Node, S=#state{}) ->
 	AtomName = erl_syntax:atom_name(Node),
-	%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
-	LineNo = erl_syntax:get_pos(Node),
-	if  LineNo > 0 ->
-		NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
-		%io:format("old state ~p, new state ~p~n",[debug_print_state(S), debug_print_state(NewState)]),
-		{[], NewState};
-	true ->
-		{[],S}
+	case AtomName of
+	    '' ->
+		output_stderr("Ignoring atom with name ''\n"),
+		{[],S};
+	    _ ->
+		%io:format("atom ~p len ~b~n",[AtomName,length(AtomName)]),
+		LineNo = erl_syntax:get_pos(Node),
+		if  LineNo > 0 ->
+			NewState = write_symbol_to_db(?SYMBOL_MARK, AtomName, Node, S),
+			%io:format("old state ~p, new state ~p~n",[debug_print_state(S), debug_print_state(NewState)]),
+			{[], NewState};
+		true ->
+			{[],S}
+		end
 	end.
 
 
@@ -143,10 +180,10 @@ process_attribute(Node,S=#state{}) ->
 			process_define(Node,S);
 		record ->
 			process_record(Node,S);
-		_ -> 
+		_ ->
 			{[],S}
 	end.
- 	
+
 process_define(Node,S=#state{}) ->
 	%io:format("subtree ~p~n",[erl_syntax:attribute_arguments(Node)]),
 	[Def | Subtree] = erl_syntax:attribute_arguments(Node),
@@ -159,6 +196,9 @@ process_define(Node,S=#state{}) ->
 
 process_function(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_function(Node) of
+		{'', _FArity} ->
+			output_stderr("Ignoring function with name ''\n"),
+			{[],S};
 		{FAtom, _FArity} ->
 			Fname = atom_to_list(FAtom),
 		 	%io:format("function ~s~n",[Fname]),
@@ -175,10 +215,13 @@ process_function(Node, S=#state{}) ->
 
 process_record(Node, S=#state{}) ->
 	try erl_syntax_lib:analyze_record_attribute(Node) of
-		{RecName, _Fields}  -> 
+		{'', _Fields} ->
+			output_stderr("Ignoring record with name ''\n"),
+			{[],S};
+		{RecName, _Fields}  ->
 			NewState1 = write_symbol_to_db(?RECORD_DEF_MARK, atom_to_list(RecName), Node, S),
 			{[] , write_symbol_to_db(?RECORD_DEF_END_MARK, "", Node, NewState1) }
-	catch 
+	catch
 		syntax_error ->
 			{[],S}
 	end.
@@ -233,9 +276,9 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 	end,
 	FoundLen = string:str( string:sub_string(Line, SearchPos), Name),
 	%io:format("fount ~p at ~p~n",[Name,FoundLen]),
-	case FoundLen > 0 of 
+	case FoundLen > 0 of
 	   true ->
-		{StartPos, L1} = 
+		{StartPos, L1} =
 		 if (LineNo =/= S#state.line_no) ->
 	 			% we have moved to new line, complete the old line
 		     	% and write the new line number
@@ -262,7 +305,7 @@ write_symbol_to_db(Type, Name, Node, S=#state{entries = Entries}) when length(Na
 
 % XXX: This assumes that there won't be two functions in the same line ...
 % called for CLOSE of FUNCTION/MACRO
- 
+
 write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	% write the left over bytes
 	Line = binary_to_list(array:get(S#state.line_no-1, S#state.data)),
@@ -270,7 +313,7 @@ write_symbol_to_db(Type, "", _Node, S=#state{entries = Entries}) ->
 	%NewLine = S#state.line_no+1,
 	%S#state{line_no=NewLine,pos=1};
 	S#state{entries = [L | Entries]};
-	
+
 write_symbol_to_db(_Type, _Name, _Node, S=#state{}) ->
 	S.
 
@@ -299,7 +342,10 @@ get_define_name(Def) ->
 		application ->
 			get_define_name(erl_syntax:application_operator(Def));
 		atom ->
-			erl_syntax:atom_literal(Def)
+			erl_syntax:atom_literal(Def);
+		underscore ->
+			erl_syntax:underscore()
+
 	end.
 
 % recursively find erlang files, returns a list of filenames
@@ -333,3 +379,6 @@ debug_print_state(S=#state{}) ->
 f(F, A) ->
 	lists:flatten(io_lib:format(F, A))
 	.
+
+output_stderr(Str) ->
+	io:put_chars(standard_error, Str).
